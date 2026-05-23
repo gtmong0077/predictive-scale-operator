@@ -20,6 +20,24 @@ spec:
           ports:
             - containerPort: 8080
 
+          env:
+            - name: SPRING_PROFILES_ACTIVE
+              value: localdb
+            - name: DB_HOST
+              value: mysql
+            - name: DB_PORT
+              value: "3306"
+            - name: DB_NAME
+              value: ticketing
+            - name: DB_USER
+              value: ticketing
+            - name: DB_PASSWORD
+              value: ticketing1234
+            - name: REDIS_HOST
+              value: redis
+            - name: REDIS_PORT
+              value: "6379"
+
           resources:
             requests:
               cpu: "200m"
@@ -32,12 +50,12 @@ spec:
             httpGet:
               path: /actuator/health
               port: 8080
-            initialDelaySeconds: 10
+            initialDelaySeconds: 20
             periodSeconds: 5
 
           livenessProbe:
             httpGet:
               path: /actuator/health
               port: 8080
-            initialDelaySeconds: 30
+            initialDelaySeconds: 40
             periodSeconds: 10
