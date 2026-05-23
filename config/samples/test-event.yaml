@@ -1,0 +1,14 @@
+apiVersion: autoscaling.eventscale.com/v1
+kind: EventScalePolicy
+metadata:
+  name: blackpink-concert
+  namespace: default
+spec:
+  targetRef:
+    name: ticket-api-hpa
+  # 오픈 시간을 지금으로부터 약 3~4분 뒤로 맞춰주세요!
+  openTime: "2026-05-23T20:25:00+09:00" 
+  targetReplicas: 50
+  preScaleSeconds: 130
+  restoreAfterSeconds: 300
+  minReplicasAfterEvent: 2
