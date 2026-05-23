@@ -209,7 +209,7 @@ Invoke-RestMethod http://localhost:8080/api/events/1/seats | ConvertTo-Json -Dep
 
 다음 구현 목표는 아래 순서가 좋습니다.
 
-1. 선점 만료 처리 추가      #Readme 수정할 것.
+1. 프론트 구현
 2. Swagger UI 추가
 3. k6 테스트를 위한 시나리오 정리
 4. Kubernetes 배포용 환경 변수 정리
