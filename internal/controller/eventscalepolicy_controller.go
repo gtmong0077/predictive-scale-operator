@@ -50,54 +50,79 @@ func (r *EventScalePolicyReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	// 2. 시간(타이밍) 계산
 	now := time.Now()
 	openTime := policy.Spec.OpenTime.Time
-	preScaleTime := openTime.Add(-time.Duration(policy.Spec.PreScaleSeconds) * time.Second)
 	restoreTime := openTime.Add(time.Duration(policy.Spec.RestoreAfterSeconds) * time.Second)
 
-	// 3. 현재 시간에 따른 '목표 상태(Target Phase)' 판단
-	targetPhase := PhaseIdle
-	if now.After(restoreTime) || now.Equal(restoreTime) {
+	// 계단식 확장 시점 (오픈 시간 기준 -130초, -90초, -50초)
+	step1Time := openTime.Add(-130 * time.Second)
+	step2Time := openTime.Add(-90 * time.Second)
+	step3Time := openTime.Add(-50 * time.Second)
+
+	var targetPhase string
+	if now.After(restoreTime) {
 		targetPhase = PhaseCoolDown
 	} else if now.After(openTime) || now.Equal(openTime) {
 		targetPhase = PhaseActive
-	} else if now.After(preScaleTime) || now.Equal(preScaleTime) {
+	} else if now.After(step1Time) || now.Equal(step1Time) {
 		targetPhase = PhasePreScaling
+	} else {
+		targetPhase = PhaseIdle
 	}
 
-	// 4. 상태에 따른 스위치문 분기 (4단계 액션)
+	// 3. 상태별 행동(Action) 및 다음 알람(Requeue) 설정
 	switch targetPhase {
 	case PhaseIdle:
-		// [1단계] 대기: 사전 확장 시간까지 얌전히 기다립니다.
-		return r.updatePhaseAndRequeue(ctx, &policy, PhaseIdle, preScaleTime.Sub(now))
+		// 130초 전(Step 1)까지 꿀잠 자기
+		return r.updatePhaseAndRequeue(ctx, &policy, PhaseIdle, step1Time.Sub(now))
 
 	case PhasePreScaling:
-		// [2단계] 사전 확장: HPA의 minReplicas를 TargetReplicas로 올립니다.
-		if err := r.updateHPAMinReplicas(ctx, &policy, policy.Spec.TargetReplicas); err != nil {
-			logger.Error(err, "Failed to scale up HPA during PRE_SCALING")
+		var currentStepTarget int32
+		var nextWakeUpTime time.Time
+		targetTotal := policy.Spec.TargetReplicas
+
+		// 현재 시간에 따라 몇 %를 띄울지 결정 (Level-triggered 방식의 장점!)
+		if now.After(step3Time) || now.Equal(step3Time) {
+			// 50초 전 ~ 오픈 전: 100% 투입
+			currentStepTarget = targetTotal
+			nextWakeUpTime = openTime // 다음 기상은 티켓팅 오픈 시간!
+		} else if now.After(step2Time) || now.Equal(step2Time) {
+			// 90초 전 ~ 50초 전: 60% 투입
+			currentStepTarget = (targetTotal * 60) / 100
+			if currentStepTarget == 0 {
+				currentStepTarget = 1
+			} // 최소 1개 보장
+			nextWakeUpTime = step3Time // 다음 기상은 50초 전(Step 3)
+		} else {
+			// 130초 전 ~ 90초 전: 30% 투입
+			currentStepTarget = (targetTotal * 30) / 100
+			if currentStepTarget == 0 {
+				currentStepTarget = 1
+			} // 최소 1개 보장
+			nextWakeUpTime = step2Time // 다음 기상은 90초 전(Step 2)
+		}
+
+		// 계산된 타겟(30%, 60%, 100%)으로 HPA 업데이트
+		if err := r.updateHPAMinReplicas(ctx, &policy, currentStepTarget); err != nil {
+			logger.Error(err, "HPA minReplicas 업데이트 실패")
 			return ctrl.Result{}, err
 		}
-		// 스케일업을 완료했으면 정각(openTime)까지 대기합니다.
-		return r.updatePhaseAndRequeue(ctx, &policy, PhasePreScaling, openTime.Sub(now))
+
+		// 목표 스텝 달성 완료, 다음 스텝 시간까지 다시 대기 모드
+		return r.updatePhaseAndRequeue(ctx, &policy, PhasePreScaling, nextWakeUpTime.Sub(now))
 
 	case PhaseActive:
-		// [3단계] 이벤트 진행 중: 타겟 HPA를 건드리지 않고 K8s Native HPA에게 위임합니다.
-		// (만약 여기에 모니터링 알람이나 로깅을 쏘고 싶다면 이 블록에 추가하면 됩니다)
-		logger.Info("Event is currently ACTIVE. Delegating autoscaling to HPA.")
+		// (기존과 동일) 100% 유지 확인 및 복구 시간까지 대기
+		if err := r.updateHPAMinReplicas(ctx, &policy, policy.Spec.TargetReplicas); err != nil {
+			return ctrl.Result{}, err
+		}
 		return r.updatePhaseAndRequeue(ctx, &policy, PhaseActive, restoreTime.Sub(now))
 
 	case PhaseCoolDown:
-		// [4단계] 복구 및 종료: 이벤트가 끝났으므로 HPA를 원래 상태로 롤백합니다.
+		// (기존과 동일) 이벤트 종료, 파드 축소
 		if err := r.updateHPAMinReplicas(ctx, &policy, policy.Spec.MinReplicasAfterEvent); err != nil {
-			logger.Error(err, "Failed to restore HPA during COOL_DOWN")
 			return ctrl.Result{}, err
 		}
-
-		// 롤백이 성공적으로 끝났다면 상태를 COMPLETED로 변경하고 Requeue를 중단합니다.
-		policy.Status.Phase = PhaseCompleted
-		if err := r.Status().Update(ctx, &policy); err != nil {
-			return ctrl.Result{}, err
-		}
-		logger.Info("EventScalePolicy successfully restored and COMPLETED")
-		return ctrl.Result{}, nil
+		// 작업 완료! 더 이상 깨워달라고 하지 않음 (Requeue 안 함)
+		return r.updatePhase(ctx, &policy, PhaseCoolDown)
 	}
 
 	return ctrl.Result{}, nil
@@ -118,6 +143,18 @@ func (r *EventScalePolicyReconciler) updatePhaseAndRequeue(ctx context.Context, 
 		waitTime = 0
 	}
 	return ctrl.Result{RequeueAfter: waitTime}, nil
+}
+
+// 에러 2 해결: 작업이 완전히 끝났을 때 상태만 변경하고 Requeue는 하지 않는 헬퍼 함수
+func (r *EventScalePolicyReconciler) updatePhase(ctx context.Context, policy *autoscalingv1.EventScalePolicy, phase string) (ctrl.Result, error) {
+	if policy.Status.Phase != phase {
+		policy.Status.Phase = phase
+		if err := r.Status().Update(ctx, policy); err != nil {
+			return ctrl.Result{}, err
+		}
+		log.FromContext(ctx).Info("Phase transitioned to final state", "Phase", phase)
+	}
+	return ctrl.Result{}, nil
 }
 
 // 타겟 HPA 리소스를 찾아 minReplicas를 안전하게 패치(Patch)하는 헬퍼 함수
