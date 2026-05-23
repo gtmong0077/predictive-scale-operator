@@ -1,0 +1,25 @@
+spring:
+  application:
+    name: ticketing-backend
+  profiles:
+    default: demo
+  data:
+    redis:
+      repositories:
+        enabled: false
+
+server:
+  port: 8080
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  endpoint:
+    health:
+      show-details: always
+
+ticketing:
+  hold-duration-minutes: 3
+  lock-duration-seconds: 5
