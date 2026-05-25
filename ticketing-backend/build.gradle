@@ -7,8 +7,9 @@ plugins {
 group = 'com.team5'
 version = '0.0.1-SNAPSHOT'
 
-def tempBuildDir = new File(System.getenv('TEMP'), 'ticketing-backend-build')
-layout.buildDirectory.set(tempBuildDir)
+def tempPath = System.getenv('TEMP') ?: System.getenv('TMPDIR')
+def resolvedBuildDir = tempPath ? new File(tempPath, 'ticketing-backend-build') : new File(projectDir, 'build')
+layout.buildDirectory.set(resolvedBuildDir)
 
 java {
 	toolchain {

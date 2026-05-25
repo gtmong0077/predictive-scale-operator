@@ -17,6 +17,11 @@
 - MySQL / Redis / Adminer 도커 환경
 - localdb 프로필 시작 시 샘플 이벤트 1개와 좌석 3개 자동 생성
 
+## 추가 문서
+
+- 상세 테스트 가이드: `BACKEND_TEST_GUIDE.md`
+- 백엔드 컨테이너 정의: `Dockerfile`
+
 ## 현재 좌석 상태 흐름
 
 - `AVAILABLE`
@@ -80,41 +85,13 @@ powershell -ExecutionPolicy Bypass -File .\scripts\gradle.ps1 bootRun --args=--s
 
 `GET /api/events/{eventId}/seats`
 
-예시:
-
-`GET /api/events/1/seats`
-
 ### 좌석 선점
 
 `POST /api/events/{eventId}/seats/{seatId}/hold`
 
-요청 본문 예시:
-
-```json
-{
-  "userId": 3001
-}
-```
-
-예시:
-
-`POST /api/events/1/seats/1/hold`
-
 ### 좌석 예약 확정
 
 `POST /api/events/{eventId}/seats/{seatId}/reserve`
-
-요청 본문 예시:
-
-```json
-{
-  "userId": 3001
-}
-```
-
-예시:
-
-`POST /api/events/1/seats/1/reserve`
 
 ## 만료 처리 동작
 
@@ -122,107 +99,24 @@ powershell -ExecutionPolicy Bypass -File .\scripts\gradle.ps1 bootRun --args=--s
 - 만료된 좌석을 바로 예약 확정하려 하면 `409 Conflict`가 반환됩니다.
 - 즉, 만료된 좌석은 다시 `hold`부터 잡아야 합니다.
 
-## fresh DB 기준 샘플 데이터
+## 테스트 방법
 
-처음 DB가 비어 있을 때만 아래 데이터가 자동으로 들어갑니다.
-이미 실행한 뒤에는 데이터가 그대로 남아 있을 수 있습니다.
+상세 명령어와 기대 결과는 `BACKEND_TEST_GUIDE.md`에 정리했습니다.
 
-이벤트 1개:
-- `Team 5 Ticketing Demo`
+빠르게 확인할 때는 아래 두 화면을 사용하면 됩니다.
 
-좌석 3개:
-- `A-1`: `AVAILABLE`
-- `A-2`: `HELD`
-- `A-3`: `RESERVED`
+- `Swagger UI`: `http://localhost:8080/swagger-ui.html`
+- `Seat Lab`: `http://localhost:8080/seat-lab.html`
 
-## 완전히 새로 시작하고 싶을 때
+## Docker 이미지
 
-```powershell
-docker compose down -v
-docker compose up -d
-```
+백엔드 전용 Dockerfile은 `ticketing-backend/Dockerfile`에 있습니다.
 
-위 명령은 MySQL / Redis 볼륨까지 지우기 때문에 샘플 데이터를 다시 처음 상태로 만들 때 사용합니다.
-
-## Seat Lab으로 테스트하는 방법
-
-브라우저에서 아래 주소로 들어갑니다.
-
-- `http://localhost:8080/seat-lab.html`
-
-이 페이지에서는 아래 흐름을 바로 테스트할 수 있습니다.
-
-- eventId 입력
-- userId 입력
-- 좌석 목록 새로고침
-- 좌석 카드에서 Hold 버튼 클릭
-- 같은 좌석을 Reserve 버튼으로 예약 확정
-- 10초 자동 새로고침으로 상태 변화 확인
-
-## Swagger UI로 테스트하는 방법
-
-브라우저에서 아래 주소로 들어갑니다.
-
-- `http://localhost:8080/swagger-ui.html`
-
-여기서 바로 아래 API를 눌러 테스트할 수 있습니다.
-
-- `GET /api/hello`
-- `GET /api/events/{eventId}/seats`
-- `POST /api/events/{eventId}/seats/{seatId}/hold`
-- `POST /api/events/{eventId}/seats/{seatId}/reserve`
-
-## PowerShell로 직접 테스트하는 방법
-
-### 1. 좌석 목록 조회
+예시 이미지 빌드 명령:
 
 ```powershell
-Invoke-RestMethod http://localhost:8080/api/events/1/seats | ConvertTo-Json -Depth 6
+docker build -t gtmong0077/ticketing-backend:0.1.0 .
 ```
-
-### 2. 비어 있는 좌석 선점
-
-```powershell
-Invoke-RestMethod -Method Post `
-  -Uri http://localhost:8080/api/events/1/seats/1/hold `
-  -ContentType 'application/json' `
-  -Body '{"userId":3001}' | ConvertTo-Json -Depth 6
-```
-
-### 3. 같은 사용자로 예약 확정
-
-```powershell
-Invoke-RestMethod -Method Post `
-  -Uri http://localhost:8080/api/events/1/seats/1/reserve `
-  -ContentType 'application/json' `
-  -Body '{"userId":3001}' | ConvertTo-Json -Depth 6
-```
-
-### 4. 다시 좌석 목록 조회
-
-```powershell
-Invoke-RestMethod http://localhost:8080/api/events/1/seats | ConvertTo-Json -Depth 6
-```
-
-## 헬스 체크와 메트릭
-
-- Health: `http://localhost:8080/actuator/health`
-- Prometheus: `http://localhost:8080/actuator/prometheus`
-- OpenAPI JSON: `http://localhost:8080/v3/api-docs`
-
-## MySQL 확인용 Adminer
-
-주소:
-
-- `http://localhost:8081`
-
-접속 정보:
-
-- System: `MySQL`
-- Server: `mysql`
-- Username: `ticketing`
-- Password: `ticketing1234`
-- Database: `ticketing`
 
 ## 지금까지 구현된 것
 
@@ -236,12 +130,13 @@ Invoke-RestMethod http://localhost:8080/api/events/1/seats | ConvertTo-Json -Dep
 8. 만료된 선점 자동 정리 처리 구현
 9. Swagger UI 기반 API 문서 / 테스트 화면 구현
 10. Seat Lab 기반 직관적 테스트 페이지 구현
+11. 백엔드 Dockerfile 및 이미지 빌드 경로 정리
 
 ## 다음 단계
 
 다음 구현 목표는 아래 순서가 좋습니다.
 
-1. 백엔드 Dockerfile 추가
-2. Kubernetes 배포용 환경 변수 정리
-3. k6 테스트를 위한 시나리오 정리
-4. 운영용 매니페스트 연결 검증
+1. Kubernetes 배포용 환경 변수 정리
+2. k6 테스트를 위한 시나리오 정리
+3. 운영용 매니페스트 연결 검증
+4. 백엔드 이미지 레지스트리 업로드 자동화
