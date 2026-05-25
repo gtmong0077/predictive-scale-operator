@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Seat Lab</title>
+    <link rel="stylesheet" href="/seat-lab.css">
+    <script defer src="/seat-lab.js"></script>
+</head>
+<body>
+<div class="page-shell">
+    <header class="hero">
+        <div>
+            <p class="eyebrow">Team 5 Ticketing Backend</p>
+            <h1>Seat Lab</h1>
+            <p class="hero-copy">좌석 조회, 선점, 예약 확정을 한 화면에서 바로 테스트하는 데모용 페이지입니다.</p>
+        </div>
+        <div class="hero-links">
+            <a href="/swagger-ui.html" target="_blank" rel="noreferrer">Swagger UI</a>
+            <a href="/actuator/health" target="_blank" rel="noreferrer">Health Check</a>
+        </div>
+    </header>
+
+    <main class="layout">
+        <section class="panel controls-panel">
+            <div class="panel-heading">
+                <h2>Control Deck</h2>
+                <p>같은 사용자 기준으로 선점과 예약을 눌러 보세요.</p>
+            </div>
+
+            <div class="form-grid">
+                <label>
+                    <span>Event ID</span>
+                    <input id="eventId" type="number" min="1" value="1">
+                </label>
+                <label>
+                    <span>User ID</span>
+                    <input id="userId" type="number" min="1" value="3001">
+                </label>
+            </div>
+
+            <div class="control-row">
+                <button id="loadSeatsButton" class="primary-button" type="button">좌석 새로고침</button>
+                <label class="toggle">
+                    <input id="autoRefresh" type="checkbox">
+                    <span>10초 자동 새로고침</span>
+                </label>
+            </div>
+
+            <div id="statusBanner" class="status-banner info">서버와 연결되면 좌석 상태가 여기에 표시됩니다.</div>
+
+            <div class="legend-grid">
+                <div class="legend-card available">
+                    <strong>AVAILABLE</strong>
+                    <span>바로 선점 가능</span>
+                </div>
+                <div class="legend-card held">
+                    <strong>HELD</strong>
+                    <span>3분 동안 선점 중</span>
+                </div>
+                <div class="legend-card reserved">
+                    <strong>RESERVED</strong>
+                    <span>예약 완료</span>
+                </div>
+            </div>
+        </section>
+
+        <section class="panel seats-panel">
+            <div class="panel-heading">
+                <h2>Seat Board</h2>
+                <p>좌석 카드에서 바로 Hold / Reserve 테스트를 할 수 있습니다.</p>
+            </div>
+            <div id="seatGrid" class="seat-grid"></div>
+        </section>
+
+        <section class="panel log-panel">
+            <div class="panel-heading">
+                <h2>Action Log</h2>
+                <p>최근 요청 결과를 시간순으로 남깁니다.</p>
+            </div>
+            <div id="actionLog" class="action-log"></div>
+        </section>
+    </main>
+</div>
+</body>
+</html>

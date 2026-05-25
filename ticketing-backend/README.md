@@ -1,9 +1,9 @@
-﻿# Ticketing Backend
+# Ticketing Backend
 
 ## 이 프로젝트가 무엇인가
 
 이 코드는 Team 5 쿠버네티스 프로젝트의 백엔드 서버입니다.
-지금 단계에서는 화면을 만드는 것이 아니라, 요청을 받으면 JSON으로 응답하는 Spring Boot 서버를 만드는 중입니다.
+지금 단계에서는 화면 중심 프론트를 만드는 것이 아니라, 요청을 받으면 JSON으로 응답하는 Spring Boot 서버를 만드는 중입니다.
 
 현재는 아래 기능이 구현되어 있습니다.
 
@@ -11,6 +11,9 @@
 - 좌석 목록 조회 API
 - 좌석 선점 API
 - 좌석 예약 확정 API
+- 선점 만료 정리 처리
+- Swagger UI 기반 API 테스트 화면
+- 직관적 테스트용 Seat Lab 페이지
 - MySQL / Redis / Adminer 도커 환경
 - localdb 프로필 시작 시 샘플 이벤트 1개와 좌석 3개 자동 생성
 
@@ -26,7 +29,7 @@
 
 프로젝트 경로:
 
-`C:\dev\Kubernetes\ticketing-backend`
+`C:\dev\Kubernetes\predictive-scale-operator\ticketing-backend`
 
 ## 준비물
 
@@ -42,7 +45,7 @@
   - 좌석 선점 / 예약 확정 API는 사용할 수 없음
 - `localdb`
   - MySQL / Redis와 연결되는 실제 개발 모드
-  - 좌석 조회 / 선점 / 예약 확정 API를 확인할 때 사용하는 모드
+  - 좌석 조회 / 선점 / 예약 확정 / Swagger UI / Seat Lab 테스트를 확인할 때 사용하는 모드
 
 ## 실행 방법
 
@@ -63,6 +66,9 @@ powershell -ExecutionPolicy Bypass -File .\scripts\gradle.ps1 bootRun --args=--s
 - `http://localhost:8080/api/hello`
 - `http://localhost:8080/api/events/1/seats`
 - `http://localhost:8080/actuator/health`
+- `http://localhost:8080/swagger-ui.html`
+- `http://localhost:8080/seat-lab.html`
+- `http://localhost:8080/v3/api-docs`
 
 ## 현재 API
 
@@ -110,6 +116,12 @@ powershell -ExecutionPolicy Bypass -File .\scripts\gradle.ps1 bootRun --args=--s
 
 `POST /api/events/1/seats/1/reserve`
 
+## 만료 처리 동작
+
+- 만료된 `HELD` 좌석은 조회 시 실제 DB 상태도 `AVAILABLE`로 정리됩니다.
+- 만료된 좌석을 바로 예약 확정하려 하면 `409 Conflict`가 반환됩니다.
+- 즉, 만료된 좌석은 다시 `hold`부터 잡아야 합니다.
+
 ## fresh DB 기준 샘플 데이터
 
 처음 DB가 비어 있을 때만 아래 데이터가 자동으로 들어갑니다.
@@ -123,10 +135,6 @@ powershell -ExecutionPolicy Bypass -File .\scripts\gradle.ps1 bootRun --args=--s
 - `A-2`: `HELD`
 - `A-3`: `RESERVED`
 
-참고:
-- `A-2`의 선점 시간이 지나면 조회 API에서는 `AVAILABLE`처럼 보입니다.
-- 한 번 바뀐 좌석 상태는 MySQL에 남기 때문에 다음 실행 때도 그대로 보일 수 있습니다.
-
 ## 완전히 새로 시작하고 싶을 때
 
 ```powershell
@@ -135,6 +143,34 @@ docker compose up -d
 ```
 
 위 명령은 MySQL / Redis 볼륨까지 지우기 때문에 샘플 데이터를 다시 처음 상태로 만들 때 사용합니다.
+
+## Seat Lab으로 테스트하는 방법
+
+브라우저에서 아래 주소로 들어갑니다.
+
+- `http://localhost:8080/seat-lab.html`
+
+이 페이지에서는 아래 흐름을 바로 테스트할 수 있습니다.
+
+- eventId 입력
+- userId 입력
+- 좌석 목록 새로고침
+- 좌석 카드에서 Hold 버튼 클릭
+- 같은 좌석을 Reserve 버튼으로 예약 확정
+- 10초 자동 새로고침으로 상태 변화 확인
+
+## Swagger UI로 테스트하는 방법
+
+브라우저에서 아래 주소로 들어갑니다.
+
+- `http://localhost:8080/swagger-ui.html`
+
+여기서 바로 아래 API를 눌러 테스트할 수 있습니다.
+
+- `GET /api/hello`
+- `GET /api/events/{eventId}/seats`
+- `POST /api/events/{eventId}/seats/{seatId}/hold`
+- `POST /api/events/{eventId}/seats/{seatId}/reserve`
 
 ## PowerShell로 직접 테스트하는 방법
 
@@ -168,18 +204,11 @@ Invoke-RestMethod -Method Post `
 Invoke-RestMethod http://localhost:8080/api/events/1/seats | ConvertTo-Json -Depth 6
 ```
 
-### 5. 예약된 좌석 다시 확정 시도
+## 헬스 체크와 메트릭
 
-같은 reserve 명령을 한 번 더 실행하면 `409 Conflict`가 나와야 정상입니다.
-
-## 헬스 체크에서 확인할 것
-
-`http://localhost:8080/actuator/health`
-
-아래가 보이면 정상입니다.
-
-- `db: UP`
-- `redis: UP`
+- Health: `http://localhost:8080/actuator/health`
+- Prometheus: `http://localhost:8080/actuator/prometheus`
+- OpenAPI JSON: `http://localhost:8080/v3/api-docs`
 
 ## MySQL 확인용 Adminer
 
@@ -204,12 +233,15 @@ Invoke-RestMethod http://localhost:8080/api/events/1/seats | ConvertTo-Json -Dep
 5. 좌석 목록 조회 API 구현
 6. Redis 기반 좌석 선점 API 구현
 7. Redis 기반 좌석 예약 확정 API 구현
+8. 만료된 선점 자동 정리 처리 구현
+9. Swagger UI 기반 API 문서 / 테스트 화면 구현
+10. Seat Lab 기반 직관적 테스트 페이지 구현
 
 ## 다음 단계
 
 다음 구현 목표는 아래 순서가 좋습니다.
 
-1. 프론트 구현
-2. Swagger UI 추가
+1. 백엔드 Dockerfile 추가
+2. Kubernetes 배포용 환경 변수 정리
 3. k6 테스트를 위한 시나리오 정리
-4. Kubernetes 배포용 환경 변수 정리
+4. 운영용 매니페스트 연결 검증
