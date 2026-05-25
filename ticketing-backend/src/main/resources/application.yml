@@ -20,6 +20,12 @@ management:
     health:
       show-details: always
 
+springdoc:
+  api-docs:
+    path: /v3/api-docs
+  swagger-ui:
+    path: /swagger-ui.html
+
 ticketing:
   hold-duration-minutes: 3
   lock-duration-seconds: 5

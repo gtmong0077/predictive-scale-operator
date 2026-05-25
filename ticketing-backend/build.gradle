@@ -7,8 +7,9 @@ plugins {
 group = 'com.team5'
 version = '0.0.1-SNAPSHOT'
 
-def tempBuildDir = new File(System.getenv('TEMP'), 'ticketing-backend-build')
-layout.buildDirectory.set(tempBuildDir)
+def tempPath = System.getenv('TEMP') ?: System.getenv('TMPDIR')
+def resolvedBuildDir = tempPath ? new File(tempPath, 'ticketing-backend-build') : new File(projectDir, 'build')
+layout.buildDirectory.set(resolvedBuildDir)
 
 java {
 	toolchain {
@@ -26,6 +27,7 @@ dependencies {
 	implementation 'org.springframework.boot:spring-boot-starter-data-redis'
 	implementation 'org.springframework.boot:spring-boot-starter-validation'
 	implementation 'org.springframework.boot:spring-boot-starter-web'
+	implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui:3.0.3'
 	runtimeOnly 'io.micrometer:micrometer-registry-prometheus'
 	runtimeOnly 'com.mysql:mysql-connector-j'
 	testImplementation 'org.springframework.boot:spring-boot-starter-test'
