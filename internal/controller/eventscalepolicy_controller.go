@@ -72,6 +72,7 @@ func (r *EventScalePolicyReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	switch targetPhase {
 	case PhaseIdle:
 		// 130초 전(Step 1)까지 꿀잠 자기
+		logger.Info("이벤트 대기 중...", "Step1 시작시간", step1Time)
 		return r.updatePhaseAndRequeue(ctx, &policy, PhaseIdle, step1Time.Sub(now))
 
 	case PhasePreScaling:
@@ -84,6 +85,7 @@ func (r *EventScalePolicyReconciler) Reconcile(ctx context.Context, req ctrl.Req
 			// 50초 전 ~ 오픈 전: 100% 투입
 			currentStepTarget = targetTotal
 			nextWakeUpTime = openTime // 다음 기상은 티켓팅 오픈 시간!
+			logger.Info("사전 확장 3단계 투입 [100%]", "목표파드수", currentStepTarget)
 		} else if now.After(step2Time) || now.Equal(step2Time) {
 			// 90초 전 ~ 50초 전: 60% 투입
 			currentStepTarget = (targetTotal * 60) / 100
@@ -91,6 +93,7 @@ func (r *EventScalePolicyReconciler) Reconcile(ctx context.Context, req ctrl.Req
 				currentStepTarget = 1
 			} // 최소 1개 보장
 			nextWakeUpTime = step3Time // 다음 기상은 50초 전(Step 3)
+			logger.Info("사전 확장 2단계 투입 [60%]", "목표파드수", currentStepTarget)
 		} else {
 			// 130초 전 ~ 90초 전: 30% 투입
 			currentStepTarget = (targetTotal * 30) / 100
@@ -98,6 +101,7 @@ func (r *EventScalePolicyReconciler) Reconcile(ctx context.Context, req ctrl.Req
 				currentStepTarget = 1
 			} // 최소 1개 보장
 			nextWakeUpTime = step2Time // 다음 기상은 90초 전(Step 2)
+			logger.Info("사전 확장 1단계 투입 [30%]", "목표파드수", currentStepTarget)
 		}
 
 		// 계산된 타겟(30%, 60%, 100%)으로 HPA 업데이트
@@ -111,6 +115,7 @@ func (r *EventScalePolicyReconciler) Reconcile(ctx context.Context, req ctrl.Req
 
 	case PhaseActive:
 		// (기존과 동일) 100% 유지 확인 및 복구 시간까지 대기
+		logger.Info("이벤트 진행 중! 100% 상태 유지")
 		if err := r.updateHPAMinReplicas(ctx, &policy, policy.Spec.TargetReplicas); err != nil {
 			return ctrl.Result{}, err
 		}
@@ -118,6 +123,7 @@ func (r *EventScalePolicyReconciler) Reconcile(ctx context.Context, req ctrl.Req
 
 	case PhaseCoolDown:
 		// (기존과 동일) 이벤트 종료, 파드 축소
+		logger.Info("이벤트 종료. 기존 스케일로 복구")
 		if err := r.updateHPAMinReplicas(ctx, &policy, policy.Spec.MinReplicasAfterEvent); err != nil {
 			return ctrl.Result{}, err
 		}
