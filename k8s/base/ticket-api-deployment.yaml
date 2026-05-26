@@ -15,7 +15,7 @@ spec:
     spec:
       containers:
         - name: ticket-api
-          image: ticket-api:0.1.0
+          image: gtmong0077/ticketing-backend:0.1.0
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8080
@@ -46,16 +46,27 @@ spec:
               cpu: "500m"
               memory: "512Mi"
 
+          startupProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 30
+
           readinessProbe:
             httpGet:
               path: /actuator/health
               port: 8080
-            initialDelaySeconds: 20
             periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 12
 
           livenessProbe:
             httpGet:
               path: /actuator/health
               port: 8080
-            initialDelaySeconds: 40
-            periodSeconds: 10
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
