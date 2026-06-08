@@ -5,6 +5,23 @@ metadata:
   name: manager-role
 rules:
 - apiGroups:
+  - ""
+  resources:
+  - pods
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - apps
+  resources:
+  - deployments
+  - replicasets
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
   - autoscaling
   resources:
   - horizontalpodautoscalers
@@ -15,7 +32,7 @@ rules:
   - update
   - watch
 - apiGroups:
-  - autoscaling.yourdomain.com
+  - autoscaling.eventscale.com
   resources:
   - eventscalepolicies
   verbs:
@@ -27,7 +44,13 @@ rules:
   - update
   - watch
 - apiGroups:
-  - autoscaling.yourdomain.com
+  - autoscaling.eventscale.com
+  resources:
+  - eventscalepolicies/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - autoscaling.eventscale.com
   resources:
   - eventscalepolicies/status
   verbs:

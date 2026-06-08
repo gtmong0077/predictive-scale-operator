@@ -18,9 +18,15 @@ spec:
     - jsonPath: .status.phase
       name: Phase
       type: string
-    - jsonPath: .spec.targetReplicas
-      name: TargetReplicas
+    - jsonPath: .status.computedTargetReplicas
+      name: Target
       type: integer
+    - jsonPath: .status.readyReplicas
+      name: Ready
+      type: integer
+    - jsonPath: .spec.openTime
+      name: OpenTime
+      type: date
     name: v1
     schema:
       openAPIV3Schema:
@@ -43,48 +49,167 @@ spec:
           metadata:
             type: object
           spec:
-            description: EventScalePolicySpec은 친구분과 정의한 핵심 필드들을 포함합니다.
+            description: EventScalePolicySpec defines the desired state of EventScalePolicy.
             properties:
-              minReplicasAfterEvent:
+              expectedPeakRPS:
                 format: int32
-                minimum: 1
+                type: integer
+              maxOverprovisionMinutes:
+                format: int32
+                type: integer
+              maxReplicas:
+                format: int32
+                type: integer
+              metricPolicy:
+                items:
+                  type: string
+                type: array
+              minReplicas:
+                format: int32
                 type: integer
               openTime:
                 format: date-time
                 type: string
-              preScaleSeconds:
+              podStableRPS:
                 format: int32
-                minimum: 0
                 type: integer
-              restoreAfterSeconds:
+              readinessPercentile:
+                type: string
+              scaleDownGuardMinutes:
                 format: int32
-                minimum: 0
                 type: integer
-              targetRef:
-                description: TargetRef는 조작할 HPA 리소스를 가리킵니다.
+              startupProfile:
+                description: |-
+                  StartupProfile holds measured startup delays for preScaleSeconds calculation.
+                  preScaleSeconds = detectDecide + node + podReady + warmup + safetyMargin
                 properties:
-                  name:
-                    type: string
-                required:
-                - name
+                  detectDecideSeconds:
+                    format: int32
+                    type: integer
+                  nodeSeconds:
+                    format: int32
+                    type: integer
+                  podReadySeconds:
+                    format: int32
+                    type: integer
+                  safetyMarginSeconds:
+                    format: int32
+                    type: integer
                 type: object
-              targetReplicas:
+              stepPolicy:
+                items:
+                  description: StepPolicy defines a pre-scale step relative to openTime.
+                  properties:
+                    offsetSeconds:
+                      format: int32
+                      type: integer
+                    ratio:
+                      type: number
+                  required:
+                  - offsetSeconds
+                  - ratio
+                  type: object
+                type: array
+              targetDeployment:
+                type: string
+              targetUtilization:
+                type: number
+              warmupSeconds:
                 format: int32
-                minimum: 1
                 type: integer
             required:
-            - minReplicasAfterEvent
+            - expectedPeakRPS
+            - maxOverprovisionMinutes
+            - maxReplicas
+            - minReplicas
             - openTime
-            - preScaleSeconds
-            - restoreAfterSeconds
-            - targetRef
-            - targetReplicas
+            - podStableRPS
+            - scaleDownGuardMinutes
+            - startupProfile
+            - stepPolicy
+            - targetDeployment
+            - targetUtilization
+            - warmupSeconds
             type: object
           status:
-            description: EventScalePolicyStatus는 오퍼레이터가 관리하는 현재 상태를 기록합니다.
+            description: EventScalePolicyStatus defines the observed state of EventScalePolicy.
             properties:
+              computedTargetReplicas:
+                format: int32
+                type: integer
+              conditions:
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+              currentStep:
+                format: int32
+                type: integer
+              desiredMinReplicas:
+                format: int32
+                type: integer
+              lastTransitionTime:
+                format: date-time
+                type: string
               phase:
                 type: string
+              preScaleStartTime:
+                format: date-time
+                type: string
+              readyReplicas:
+                format: int32
+                type: integer
             type: object
         type: object
     served: true

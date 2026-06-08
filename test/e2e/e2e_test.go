@@ -270,15 +270,33 @@ var _ = Describe("Manager", Ordered, func() {
 
 		// +kubebuilder:scaffold:e2e-webhooks-checks
 
-		// TODO: Customize the e2e test suite with scenarios specific to your project.
-		// Consider applying sample/CR(s) and check their status and/or verifying
-		// the reconciliation by using the metrics, i.e.:
-		// metricsOutput, err := getMetricsOutput()
-		// Expect(err).NotTo(HaveOccurred(), "Failed to retrieve logs from curl pod")
-		// Expect(metricsOutput).To(ContainSubstring(
-		//    fmt.Sprintf(`controller_runtime_reconcile_total{controller="%s",result="success"} 1`,
-		//    strings.ToLower(<Kind>),
-		// ))
+		It("should accept EventScalePolicy custom resource", func() {
+			const sampleName = "e2e-eventscalepolicy-sample"
+
+			By("creating default namespace if needed")
+			cmd := exec.Command("kubectl", "create", "ns", "default")
+			_, _ = utils.Run(cmd)
+
+			By("applying sample EventScalePolicy")
+			samplePath := filepath.Join("config", "samples", "autoscaling_v1_eventscalepolicy.yaml")
+			cmd = exec.Command("kubectl", "apply", "-f", samplePath)
+			_, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred(), "Failed to apply sample EventScalePolicy")
+
+			By("verifying EventScalePolicy exists")
+			verifyCR := func(g Gomega) {
+				cmd = exec.Command("kubectl", "get", "eventscalepolicy", sampleName, "-n", "default",
+					"-o", "jsonpath={.spec.targetDeployment}")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(output).To(Equal("ticket-api"))
+			}
+			Eventually(verifyCR).Should(Succeed())
+
+			By("cleaning up sample EventScalePolicy")
+			cmd = exec.Command("kubectl", "delete", "-f", samplePath, "--ignore-not-found")
+			_, _ = utils.Run(cmd)
+		})
 	})
 })
 

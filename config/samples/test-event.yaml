@@ -1,14 +1,33 @@
 apiVersion: autoscaling.eventscale.com/v1
 kind: EventScalePolicy
 metadata:
-  name: blackpink-concert
-  namespace: default
+  name: concert-ticket-open
+  namespace: ticketing
 spec:
-  targetRef:
-    name: ticket-api-hpa
-  # 오픈 시간을 지금으로부터 약 3~4분 뒤로 맞춰주세요!
-  openTime: "2026-05-23T20:25:00+09:00" 
-  targetReplicas: 50
-  preScaleSeconds: 130
-  restoreAfterSeconds: 300
-  minReplicasAfterEvent: 2
+  targetDeployment: ticket-api
+  openTime: "2026-06-08T22:45:00+09:00"
+
+  expectedPeakRPS: 5000
+  podStableRPS: 120
+  targetUtilization: 0.7
+  minReplicas: 3
+  maxReplicas: 80
+
+  readinessPercentile: p95
+  warmupSeconds: 30
+  startupProfile:
+    detectDecideSeconds: 20    # T_detect(15s HPA) + T_decide
+    nodeSeconds: 0             # kind: 0, EKS+Karpenter: 실측값
+    podReadySeconds: 90        # k6 profiling p95
+    safetyMarginSeconds: 30
+
+  stepPolicy:
+    - offsetSeconds: 180
+      ratio: 0.4
+    - offsetSeconds: 90
+      ratio: 0.75
+    - offsetSeconds: 30
+      ratio: 1.0
+
+  scaleDownGuardMinutes: 10
+  maxOverprovisionMinutes: 15
