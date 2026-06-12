@@ -5,7 +5,7 @@ metadata:
   namespace: ticketing
 spec:
   targetDeployment: ticket-api
-  openTime: "2026-06-08T22:45:00+09:00"
+  openTime: "2026-06-09T20:00:00+09:00"
 
   expectedPeakRPS: 5000
   podStableRPS: 120

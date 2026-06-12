@@ -63,8 +63,8 @@ spec:
         args:
           - --leader-elect
           - --health-probe-bind-address=:8081
-        image: jaewon0077/predictive-scale-operator:latest
-        imagePullPolicy: Always
+        image: controller:latest
+        imagePullPolicy: IfNotPresent
         name: manager
         ports:
         - containerPort: 8081
