@@ -3,8 +3,11 @@ kind: Deployment
 metadata:
   name: ticket-api
   namespace: ticketing
+  labels:
+    app: ticket-api
+    autoscaling.eventscale.com/managed: "true"
 spec:
-  replicas: 1
+  replicas: 3
   selector:
     matchLabels:
       app: ticket-api
@@ -15,7 +18,7 @@ spec:
     spec:
       containers:
         - name: ticket-api
-          image: gtmong0077/ticketing-backend:0.1.0
+          image: jaewon0077/ticketing-backend:latest
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8080

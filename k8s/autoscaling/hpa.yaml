@@ -3,14 +3,17 @@ kind: HorizontalPodAutoscaler
 metadata:
   name: ticket-api-hpa
   namespace: ticketing
+  labels:
+    app: ticket-api
+    autoscaling.eventscale.com/managed: "true"
 spec:
   scaleTargetRef:
     apiVersion: apps/v1
     kind: Deployment
     name: ticket-api
 
-  minReplicas: 1
-  maxReplicas: 10
+  minReplicas: 3
+  maxReplicas: 80
 
   metrics:
     - type: Resource
@@ -18,7 +21,7 @@ spec:
         name: cpu
         target:
           type: Utilization
-          averageUtilization: 60
+          averageUtilization: 70
 
   behavior:
     scaleUp:
@@ -33,7 +36,7 @@ spec:
       selectPolicy: Max
 
     scaleDown:
-      stabilizationWindowSeconds: 300
+      stabilizationWindowSeconds: 600
       policies:
         - type: Percent
           value: 50

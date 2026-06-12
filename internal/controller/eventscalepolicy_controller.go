@@ -4,24 +4,31 @@ import (
 	"context"
 	"time"
 
+	appsv1 "k8s.io/api/apps/v1"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
-	"k8s.io/apimachinery/pkg/api/errors"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	autoscalingv1 "github.com/gtmong0077/predictive-scale-operator/api/v1" // 모듈 이름에 맞게 수정하세요
+	autoscalingv1 "github.com/gtmong0077/predictive-scale-operator/api/v1"
 )
 
-// 4단계 상태 정의
 const (
-	PhaseIdle       = "IDLE"         // 시작 전 대기
-	PhasePreScaling = "PRE_SCALING"  // 오픈 전 파드 미리 확장
-	PhaseActive     = "EVENT_ACTIVE" // 티켓팅 진행 중 (HPA 위임 구간)
-	PhaseCoolDown   = "COOL_DOWN"    // 이벤트 종료 및 자원 회수 시점
-	PhaseCompleted  = "COMPLETED"    // 완전히 종료됨
+	PhaseIdle           = "IDLE"
+	PhasePreScaling     = "PRE_SCALING"
+	PhaseReadyBuffer    = "READY_BUFFER"
+	PhaseEventActive    = "EVENT_ACTIVE"
+	PhaseScaleDownGuard = "SCALE_DOWN_GUARD"
+	PhaseCompleted      = "COMPLETED"
+
+	reconcileInterval = 30 * time.Second
+	readyThreshold    = 0.95
 )
 
 type EventScalePolicyReconciler struct {
@@ -29,128 +36,262 @@ type EventScalePolicyReconciler struct {
 	Scheme *runtime.Scheme
 }
 
-// +kubebuilder:rbac:groups=autoscaling.yourdomain.com,resources=eventscalepolicies,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=autoscaling.yourdomain.com,resources=eventscalepolicies/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=autoscaling.eventscale.com,resources=eventscalepolicies,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=autoscaling.eventscale.com,resources=eventscalepolicies/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=autoscaling.eventscale.com,resources=eventscalepolicies/finalizers,verbs=update
 // +kubebuilder:rbac:groups=autoscaling,resources=horizontalpodautoscalers,verbs=get;list;watch;update;patch
+// +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch
+// +kubebuilder:rbac:groups=apps,resources=replicasets,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
 
 func (r *EventScalePolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 
-	// 1. 정책 CRD 조회
 	var policy autoscalingv1.EventScalePolicy
 	if err := r.Get(ctx, req.NamespacedName, &policy); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	// 이미 처리가 완료된 이벤트면 더 이상 Reconcile하지 않음
 	if policy.Status.Phase == PhaseCompleted {
 		return ctrl.Result{}, nil
 	}
 
-	// 2. 시간(타이밍) 계산
 	now := time.Now()
 	openTime := policy.Spec.OpenTime.Time
-	preScaleTime := openTime.Add(-time.Duration(policy.Spec.PreScaleSeconds) * time.Second)
-	restoreTime := openTime.Add(time.Duration(policy.Spec.RestoreAfterSeconds) * time.Second)
+	preScaleSeconds := ComputePreScaleSeconds(policy.Spec.StartupProfile, policy.Spec.WarmupSeconds)
+	preScaleStart := openTime.Add(-time.Duration(preScaleSeconds) * time.Second)
+	guardStart := openTime.Add(time.Duration(policy.Spec.MaxOverprovisionMinutes) * time.Minute)
+	completedStart := guardStart.Add(time.Duration(policy.Spec.ScaleDownGuardMinutes) * time.Minute)
 
-	// 3. 현재 시간에 따른 '목표 상태(Target Phase)' 판단
-	targetPhase := PhaseIdle
-	if now.After(restoreTime) || now.Equal(restoreTime) {
-		targetPhase = PhaseCoolDown
-	} else if now.After(openTime) || now.Equal(openTime) {
-		targetPhase = PhaseActive
-	} else if now.After(preScaleTime) || now.Equal(preScaleTime) {
-		targetPhase = PhasePreScaling
+	finalReplicas := ComputeTargetReplicas(
+		policy.Spec.ExpectedPeakRPS,
+		policy.Spec.PodStableRPS,
+		policy.Spec.TargetUtilization,
+		policy.Spec.MinReplicas,
+		policy.Spec.MaxReplicas,
+	)
+
+	readyReplicas, _, err := CountReadyPods(ctx, r.Client, policy.Namespace, policy.Spec.TargetDeployment)
+	if err != nil {
+		logger.Error(err, "Could not count ready Pods", "deployment", policy.Spec.TargetDeployment)
+		return ctrl.Result{RequeueAfter: reconcileInterval}, err
 	}
 
-	// 4. 상태에 따른 스위치문 분기 (4단계 액션)
-	switch targetPhase {
-	case PhaseIdle:
-		// [1단계] 대기: 사전 확장 시간까지 얌전히 기다립니다.
-		return r.updatePhaseAndRequeue(ctx, &policy, PhaseIdle, preScaleTime.Sub(now))
+	targetPhase, desiredMin, currentStep, requeueAfter := r.resolvePhase(
+		now, openTime, preScaleStart, guardStart, completedStart,
+		finalReplicas, policy.Spec.MinReplicas, policy.Spec.StepPolicy,
+		readyReplicas,
+	)
 
-	case PhasePreScaling:
-		// [2단계] 사전 확장: HPA의 minReplicas를 TargetReplicas로 올립니다.
-		if err := r.updateHPAMinReplicas(ctx, &policy, policy.Spec.TargetReplicas); err != nil {
-			logger.Error(err, "Failed to scale up HPA during PRE_SCALING")
-			return ctrl.Result{}, err
-		}
-		// 스케일업을 완료했으면 정각(openTime)까지 대기합니다.
-		return r.updatePhaseAndRequeue(ctx, &policy, PhasePreScaling, openTime.Sub(now))
+	if err := r.syncStatus(ctx, &policy, targetPhase, finalReplicas, readyReplicas, desiredMin, currentStep, preScaleStart); err != nil {
+		return ctrl.Result{}, err
+	}
 
-	case PhaseActive:
-		// [3단계] 이벤트 진행 중: 타겟 HPA를 건드리지 않고 K8s Native HPA에게 위임합니다.
-		// (만약 여기에 모니터링 알람이나 로깅을 쏘고 싶다면 이 블록에 추가하면 됩니다)
-		logger.Info("Event is currently ACTIVE. Delegating autoscaling to HPA.")
-		return r.updatePhaseAndRequeue(ctx, &policy, PhaseActive, restoreTime.Sub(now))
+	if err := PatchHPAMinMax(ctx, r.Client, r.Scheme, &policy, desiredMin, policy.Spec.MaxReplicas); err != nil {
+		logger.Error(err, "Could not patch HPA", "deployment", policy.Spec.TargetDeployment)
+		return ctrl.Result{RequeueAfter: reconcileInterval}, err
+	}
 
-	case PhaseCoolDown:
-		// [4단계] 복구 및 종료: 이벤트가 끝났으므로 HPA를 원래 상태로 롤백합니다.
-		if err := r.updateHPAMinReplicas(ctx, &policy, policy.Spec.MinReplicasAfterEvent); err != nil {
-			logger.Error(err, "Failed to restore HPA during COOL_DOWN")
-			return ctrl.Result{}, err
-		}
-
-		// 롤백이 성공적으로 끝났다면 상태를 COMPLETED로 변경하고 Requeue를 중단합니다.
-		policy.Status.Phase = PhaseCompleted
-		if err := r.Status().Update(ctx, &policy); err != nil {
-			return ctrl.Result{}, err
-		}
-		logger.Info("EventScalePolicy successfully restored and COMPLETED")
+	if targetPhase == PhaseCompleted {
 		return ctrl.Result{}, nil
 	}
 
-	return ctrl.Result{}, nil
+	if requeueAfter <= 0 {
+		requeueAfter = reconcileInterval
+	}
+	return ctrl.Result{RequeueAfter: requeueAfter}, nil
 }
 
-// 상태(Phase)를 업데이트하고 다음 이벤트 시점까지 Requeue(예약)하는 헬퍼 함수
-func (r *EventScalePolicyReconciler) updatePhaseAndRequeue(ctx context.Context, policy *autoscalingv1.EventScalePolicy, phase string, waitTime time.Duration) (ctrl.Result, error) {
+func (r *EventScalePolicyReconciler) resolvePhase(
+	now, openTime, preScaleStart, guardStart, completedStart time.Time,
+	finalReplicas, minReplicas int32,
+	steps []autoscalingv1.StepPolicy,
+	readyReplicas int32,
+) (phase string, desiredMin int32, currentStep int32, requeueAfter time.Duration) {
+	switch {
+	case now.Before(preScaleStart):
+		return PhaseIdle, minReplicas, -1, preScaleStart.Sub(now)
+
+	case now.Before(openTime):
+		secondsUntilOpen := int64(openTime.Sub(now).Seconds())
+		stepIndex, desired := resolvePreScaleStep(finalReplicas, minReplicas, steps, readyReplicas, secondsUntilOpen)
+
+		readyTarget := int32(float64(finalReplicas) * readyThreshold)
+		if readyReplicas >= readyTarget && secondsUntilOpen <= 30 {
+			return PhaseReadyBuffer, finalReplicas, stepIndex, openTime.Sub(now)
+		}
+
+		return PhasePreScaling, desired, stepIndex, minDuration(openTime.Sub(now), reconcileInterval)
+
+	case now.Before(guardStart):
+		return PhaseEventActive, finalReplicas, int32(len(steps) - 1), guardStart.Sub(now)
+
+	case now.Before(completedStart):
+		return PhaseScaleDownGuard, minReplicas, -1, completedStart.Sub(now)
+
+	default:
+		return PhaseCompleted, minReplicas, -1, 0
+	}
+}
+
+func (r *EventScalePolicyReconciler) syncStatus(
+	ctx context.Context,
+	policy *autoscalingv1.EventScalePolicy,
+	phase string,
+	finalReplicas, readyReplicas, desiredMin, currentStep int32,
+	preScaleStart time.Time,
+) error {
+	now := metav1Now()
+	changed := false
+
 	if policy.Status.Phase != phase {
 		policy.Status.Phase = phase
-		if err := r.Status().Update(ctx, policy); err != nil {
-			return ctrl.Result{}, err
-		}
-		log.FromContext(ctx).Info("Phase transitioned", "NewPhase", phase)
+		policy.Status.LastTransitionTime = now
+		changed = true
+	}
+	if policy.Status.ComputedTargetReplicas != finalReplicas {
+		policy.Status.ComputedTargetReplicas = finalReplicas
+		changed = true
+	}
+	if policy.Status.ReadyReplicas != readyReplicas {
+		policy.Status.ReadyReplicas = readyReplicas
+		changed = true
+	}
+	if policy.Status.DesiredMinReplicas != desiredMin {
+		policy.Status.DesiredMinReplicas = desiredMin
+		changed = true
+	}
+	if policy.Status.CurrentStep != currentStep {
+		policy.Status.CurrentStep = currentStep
+		changed = true
 	}
 
-	// 방어 코드: 시간이 음수면 즉시 실행(0)
-	if waitTime < 0 {
-		waitTime = 0
-	}
-	return ctrl.Result{RequeueAfter: waitTime}, nil
-}
-
-// 타겟 HPA 리소스를 찾아 minReplicas를 안전하게 패치(Patch)하는 헬퍼 함수
-func (r *EventScalePolicyReconciler) updateHPAMinReplicas(ctx context.Context, policy *autoscalingv1.EventScalePolicy, targetMinReplicas int32) error {
-	hpaName := types.NamespacedName{
-		Name:      policy.Spec.TargetRef.Name,
-		Namespace: policy.Namespace,
+	preScaleStartMeta := metav1Time(preScaleStart)
+	if policy.Status.PreScaleStartTime == nil || !policy.Status.PreScaleStartTime.Equal(&preScaleStartMeta) {
+		policy.Status.PreScaleStartTime = &preScaleStartMeta
+		changed = true
 	}
 
-	var hpa autoscalingv2.HorizontalPodAutoscaler
-	if err := r.Get(ctx, hpaName, &hpa); err != nil {
-		if errors.IsNotFound(err) {
-			log.FromContext(ctx).Info("HPA not found, skipping patch", "HPA", hpaName.Name)
-			return nil
-		}
-		return err
-	}
-
-	// 멱등성 보장: 이미 값이 목표치와 같다면 API 서버에 패치 요청을 보내지 않음
-	if hpa.Spec.MinReplicas != nil && *hpa.Spec.MinReplicas == targetMinReplicas {
+	if !changed {
 		return nil
 	}
 
-	// 기존 객체 복사 후 Patch 적용 (Conflict 에러 방지)
-	originalHPA := hpa.DeepCopy()
-	hpa.Spec.MinReplicas = &targetMinReplicas
+	if err := r.Status().Update(ctx, policy); err != nil {
+		return err
+	}
 
-	log.FromContext(ctx).Info("Patching HPA minReplicas", "HPA", hpa.Name, "NewMinReplicas", targetMinReplicas)
-	return r.Patch(ctx, &hpa, client.MergeFrom(originalHPA))
+	log.FromContext(ctx).Info("Updated EventScalePolicy status",
+		"phase", phase,
+		"targetReplicas", finalReplicas,
+		"readyReplicas", readyReplicas,
+		"desiredMinReplicas", desiredMin,
+	)
+	return nil
 }
 
 func (r *EventScalePolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&autoscalingv1.EventScalePolicy{}).
+		Owns(&autoscalingv2.HorizontalPodAutoscaler{}).
+		Watches(
+			&appsv1.Deployment{},
+			handler.EnqueueRequestsFromMapFunc(r.findPoliciesForDeployment),
+		).
+		Watches(
+			&corev1.Pod{},
+			handler.EnqueueRequestsFromMapFunc(r.findPoliciesForPod),
+		).
+		Watches(
+			&autoscalingv2.HorizontalPodAutoscaler{},
+			handler.EnqueueRequestsFromMapFunc(r.findPoliciesForHPA),
+		).
 		Complete(r)
+}
+
+func (r *EventScalePolicyReconciler) findPoliciesForPod(ctx context.Context, obj client.Object) []reconcile.Request {
+	pod, ok := obj.(*corev1.Pod)
+	if !ok {
+		return nil
+	}
+
+	deploymentName := deploymentNameFromPod(ctx, r.Client, pod)
+	if deploymentName == "" {
+		return nil
+	}
+	return r.listPolicyRequests(ctx, pod.Namespace, deploymentName)
+}
+
+func deploymentNameFromPod(ctx context.Context, c client.Client, pod *corev1.Pod) string {
+	for _, ref := range pod.OwnerReferences {
+		if ref.Kind != "ReplicaSet" {
+			continue
+		}
+
+		var rs appsv1.ReplicaSet
+		if err := c.Get(ctx, types.NamespacedName{
+			Name:      ref.Name,
+			Namespace: pod.Namespace,
+		}, &rs); err != nil {
+			continue
+		}
+
+		for _, rsRef := range rs.OwnerReferences {
+			if rsRef.Kind == "Deployment" {
+				return rsRef.Name
+			}
+		}
+	}
+	return ""
+}
+
+func (r *EventScalePolicyReconciler) findPoliciesForDeployment(ctx context.Context, obj client.Object) []reconcile.Request {
+	deployment, ok := obj.(*appsv1.Deployment)
+	if !ok {
+		return nil
+	}
+	return r.listPolicyRequests(ctx, deployment.Namespace, deployment.Name)
+}
+
+func (r *EventScalePolicyReconciler) findPoliciesForHPA(ctx context.Context, obj client.Object) []reconcile.Request {
+	hpa, ok := obj.(*autoscalingv2.HorizontalPodAutoscaler)
+	if !ok {
+		return nil
+	}
+	if hpa.Spec.ScaleTargetRef.Kind != "Deployment" {
+		return nil
+	}
+	return r.listPolicyRequests(ctx, hpa.Namespace, hpa.Spec.ScaleTargetRef.Name)
+}
+
+func (r *EventScalePolicyReconciler) listPolicyRequests(ctx context.Context, namespace, deploymentName string) []reconcile.Request {
+	var policies autoscalingv1.EventScalePolicyList
+	if err := r.List(ctx, &policies, client.InNamespace(namespace)); err != nil {
+		return nil
+	}
+
+	requests := make([]reconcile.Request, 0)
+	for i := range policies.Items {
+		if policies.Items[i].Spec.TargetDeployment == deploymentName {
+			requests = append(requests, reconcile.Request{
+				NamespacedName: client.ObjectKeyFromObject(&policies.Items[i]),
+			})
+		}
+	}
+	return requests
+}
+
+func minDuration(a, b time.Duration) time.Duration {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func metav1Now() *metav1.Time {
+	now := metav1.Now()
+	return &now
+}
+
+func metav1Time(t time.Time) metav1.Time {
+	return metav1.NewTime(t)
 }

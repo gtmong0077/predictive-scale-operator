@@ -6,4 +6,25 @@ metadata:
     app.kubernetes.io/managed-by: kustomize
   name: eventscalepolicy-sample
 spec:
-  # TODO(user): Add fields here
+  targetDeployment: ticket-api
+  openTime: "2026-06-08T22:35:00+09:00"
+  expectedPeakRPS: 1000
+  podStableRPS: 100
+  targetUtilization: 0.7
+  minReplicas: 1
+  maxReplicas: 10
+  warmupSeconds: 30
+  startupProfile:
+    detectDecideSeconds: 20
+    nodeSeconds: 0
+    podReadySeconds: 60
+    safetyMarginSeconds: 30
+  stepPolicy:
+    - offsetSeconds: 180
+      ratio: 0.4
+    - offsetSeconds: 90
+      ratio: 0.75
+    - offsetSeconds: 30
+      ratio: 1.0
+  scaleDownGuardMinutes: 10
+  maxOverprovisionMinutes: 15
